@@ -1,0 +1,20 @@
+diff --git a/node_modules/handlebars/lib/index.js b/node_modules/handlebars/lib/index.js
+index 478546f..461c37b 100644
+--- a/node_modules/handlebars/lib/index.js
++++ b/node_modules/handlebars/lib/index.js
+@@ -1,5 +1,5 @@
+ // lib/index.js
+-require.extensions['.hbs'] = function (module, filename) {
++/*require.extensions['.hbs'] = function (module, filename) {
+   var fs = require('fs');
+   var Handlebars = require('./handlebars');
+   var templateString = fs.readFileSync(filename, 'utf8');
+@@ -7,4 +7,4 @@
+   module.exports = Handlebars.compile(templateString);
+ };
+ 
+-module.exports = require('./handlebars');
+\ No newline at end of file
++module.exports = require('./handlebars');
++*/
++module.exports = require('./handlebars');

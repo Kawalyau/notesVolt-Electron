@@ -1,0 +1,75 @@
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Default: Deny all reads and writes
+    // match /{allPaths=**} {
+    //   allow read, write: if false;
+    // }
+
+    // User profile images:
+    // - Allow users to write to their own profile image path.
+    // - Allow anyone to read profile images.
+    match /profile_images/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Resources:
+    // - Allow authenticated users to write to their own resources path.
+    // - Allow anyone to read resource files.
+    match /resources/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // School Badges:
+    // Authenticated users (school admins during creation) can write.
+    // Anyone can read.
+    match /school_badges/{schoolId}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null; // Further tightened by Firestore rules on who can create/update school
+    }
+
+    // School Documents (registration cert, UNEB cert, etc.):
+    // Similar to badges, but path might be more nested.
+    // Only school admins should be able to write here.
+    match /school_documents/{schoolId}/{documentType}/{fileName} {
+        allow read: if true;
+        allow write: if request.auth != null && resource.metadata.schoolAdminUid == request.auth.uid;
+        // To make this work, you'd need to set custom metadata 'schoolAdminUid' during upload
+        // containing one of the school's adminUids.
+        // Or, more simply if functions are managing writes based on Firestore roles:
+        // allow write: if request.auth != null; // And then rely on Firestore rules + Cloud Function security
+    }
+
+    // Global Cover Page (admin_assets)
+    // - Only allow reads by anyone (so function can fetch it).
+    // - Only allow writes by authenticated users (implicitly admins, as only they access the upload UI).
+    //   Further security can be added if needed (e.g., checking custom claims via function before write).
+    match /admin_assets/global_cover_page.pdf {
+        allow read: if true;
+        allow write: if request.auth != null; // Tighten this if you add admin custom claims
+    }
+
+    // Exam Papers
+    // - Allow anyone to read (if exams are public).
+    // - Only allow writes by authenticated users (admins through UI).
+    match /exam_papers/{examSetId}/{fileName} {
+        allow read: if true;
+        allow write: if request.auth != null; // Assume only admins can trigger uploads here via app logic
+    }
+
+    // Temporary Import Files
+    match /temp_imports/{importType}/{userId}/{fileName} {
+        allow read, write, delete: if request.auth != null && request.auth.uid == userId;
+        // The Cloud Function will delete after processing.
+    }
+
+    // Default deny for any other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

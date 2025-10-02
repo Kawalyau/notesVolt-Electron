@@ -1,0 +1,347 @@
+
+// src/app/school/dashboard/[schoolId]/finance/expenses/page.tsx
+"use client";
+
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
+import { useAuth } from '@/hooks/use-auth';
+import { useToast } from '@/hooks/use-toast';
+import { getSchoolById, getSchoolSubcollectionItems, addSchoolSubcollectionItem, deleteSchoolSubcollectionItem, updateSchoolSubcollectionItem } from '@/services';
+import type { School, SchoolExpense, SchoolAcademicYear, SchoolTerm, ChartOfAccountItem } from '@/types/school';
+import { firestore } from '@/config/firebase';
+import { serverTimestamp, Timestamp, orderBy } from 'firebase/firestore';
+import { format, parseISO, isValid as isDateValid } from 'date-fns';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Loader2, PlusCircle, Trash2, TrendingDown, CalendarDays, BookHeart, DollarSign as DollarIcon, Info, Edit, BookOpen } from 'lucide-react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const expenseSchema = z.object({
+  date: z.date({ required_error: "Expense date is required" }),
+  accountId: z.string().min(1, "Expense account is required"),
+  description: z.string().min(1, "Description is required").max(500),
+  amount: z.preprocess(
+    (val) => parseFloat(String(val)),
+    z.number().refine(val => !isNaN(val) && val > 0, "Amount must be a positive number.")
+  ),
+  paymentMethod: z.string().min(1, "Payment method is required"),
+  reference: z.string().optional(),
+  academicYearId: z.string().min(1, "Academic Year is required"),
+  term: z.string().min(1, "Term is required"),
+});
+
+type ExpenseFormValues = z.infer<typeof expenseSchema>;
+
+export default function ManageExpensesPage() {
+  const params = useParams();
+  const schoolId = params.schoolId as string;
+  const router = useRouter();
+  const { user, userProfile } = useAuth();
+  const { toast } = useToast();
+
+  const [school, setSchool] = useState<School | null>(null);
+  const [expenses, setExpenses] = useState<SchoolExpense[]>([]);
+  const [academicYears, setAcademicYears] = useState<SchoolAcademicYear[]>([]);
+  const [schoolTerms, setSchoolTerms] = useState<SchoolTerm[]>([]);
+  const [expenseAccounts, setExpenseAccounts] = useState<ChartOfAccountItem[]>([]);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isEditing, setIsEditing] = useState<string | null>(null);
+
+  const form = useForm<ExpenseFormValues>({
+    resolver: zodResolver(expenseSchema),
+    defaultValues: {
+      date: new Date(), accountId: "", description: "", amount: 0, paymentMethod: "", reference: "",
+      academicYearId: "", term: "",
+    },
+  });
+
+  const watchedAcademicYearId = form.watch("academicYearId");
+  const availableTermsForSelectedYear = schoolTerms.filter(term => 
+    term.academicYearId === watchedAcademicYearId && 
+    !term.isClosed && 
+    typeof term.name === 'string' && 
+    term.name.trim() !== ""
+  );
+
+  const fetchSchoolAndExpenses = useCallback(async () => {
+    if (!user || !schoolId) return;
+    setIsLoading(true);
+    try {
+      const fetchedSchool = await getSchoolById(schoolId);
+      if (fetchedSchool) {
+        if (!fetchedSchool.adminUids.includes(user.uid)) {
+          toast({ variant: "destructive", title: "Access Denied" }); router.push('/school/auth'); return;
+        }
+        setSchool(fetchedSchool);
+        form.setValue("academicYearId", fetchedSchool.currentAcademicYearId || "");
+        form.setValue("term", fetchedSchool.currentTerm || "");
+
+        const [fetchedExpenses, fetchedAcademicYears, fetchedTerms, fetchedCoaItems] = await Promise.all([
+          getSchoolSubcollectionItems<SchoolExpense>(schoolId, 'expenses', [orderBy("date", "desc")]),
+          getSchoolSubcollectionItems<SchoolAcademicYear>(schoolId, 'schoolAcademicYears', [orderBy("year", "desc")]),
+          getSchoolSubcollectionItems<SchoolTerm>(schoolId, 'schoolTerms'),
+          getSchoolSubcollectionItems<ChartOfAccountItem>(schoolId, 'chartOfAccounts', [orderBy("accountName", "asc")]),
+        ]);
+        setExpenses(fetchedExpenses);
+        setAcademicYears(fetchedAcademicYears.filter(ay => ay.id && ay.id.trim() !== ""));
+        setSchoolTerms(fetchedTerms);
+        setExpenseAccounts(fetchedCoaItems.filter(acc => acc.accountType === 'Expense' && acc.id && acc.id.trim() !== ""));
+
+      } else {
+        toast({ variant: "destructive", title: "Not Found" }); router.push('/school/auth');
+      }
+    } catch (error) {
+      console.error("Error loading data:", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not load school or expense data." });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [schoolId, user, toast, router, form]);
+
+  useEffect(() => {
+    fetchSchoolAndExpenses();
+  }, [fetchSchoolAndExpenses]);
+
+  useEffect(() => {
+    if (watchedAcademicYearId) {
+      const currentTermValue = form.getValues("term");
+      const isValidTermForYear = schoolTerms.some(term => 
+        term.academicYearId === watchedAcademicYearId && 
+        term.name === currentTermValue && 
+        !term.isClosed && 
+        typeof term.name === 'string' && 
+        term.name.trim() !== ""
+      );
+      if (currentTermValue && !isValidTermForYear) {
+        form.setValue("term", "");
+      }
+    }
+  }, [watchedAcademicYearId, schoolTerms, form]);
+
+  const onSubmit = async (data: ExpenseFormValues) => {
+    if (!userProfile || !schoolId) {
+      toast({ variant: "destructive", title: "Error", description: "User or School ID missing." });
+      return;
+    }
+    setIsSubmitting(true);
+    const selectedAccount = expenseAccounts.find(acc => acc.id === data.accountId);
+    try {
+      const expenseData: Omit<SchoolExpense, 'id' | 'createdAt' | 'updatedAt'> = {
+        date: Timestamp.fromDate(data.date),
+        category: selectedAccount?.accountName || data.accountId,
+        accountId: data.accountId,
+        accountName: selectedAccount?.accountName || null,
+        description: data.description,
+        amount: data.amount,
+        paymentMethod: data.paymentMethod,
+        reference: data.reference || null,
+        academicYearId: data.academicYearId,
+        term: data.term,
+        recordedByAdminId: userProfile.uid,
+        recordedByAdminName: userProfile.displayName || userProfile.email,
+      };
+      if (isEditing) {
+        await updateSchoolSubcollectionItem(schoolId, 'expenses', isEditing, expenseData);
+        toast({ title: "Expense Updated" });
+      } else {
+        await addSchoolSubcollectionItem(schoolId, 'expenses', expenseData);
+        toast({ title: "Expense Added" });
+      }
+      form.reset({ date: new Date(), accountId: "", description: "", amount: 0, paymentMethod: "", reference: "", academicYearId: school?.currentAcademicYearId || "", term: school?.currentTerm || "" });
+      setIsEditing(null);
+      fetchSchoolAndExpenses();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: isEditing ? "Update Failed" : "Add Failed", description: error.message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteExpense = async (expenseId: string, expenseDesc: string) => {
+    if (!window.confirm(`Are you sure you want to delete expense: "${expenseDesc}"?`)) return;
+    setIsSubmitting(true);
+    try {
+      await deleteSchoolSubcollectionItem(schoolId, 'expenses', expenseId);
+      toast({ title: "Expense Deleted", description: `Expense "${expenseDesc}" removed.` });
+      fetchSchoolAndExpenses();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Delete Error", description: error.message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleEditExpense = (expense: SchoolExpense) => {
+    setIsEditing(expense.id);
+    let expenseDate = new Date();
+    if (expense.date) {
+      try {
+        const parsed = typeof expense.date === 'string' ? parseISO(expense.date) : (expense.date as Timestamp).toDate();
+        if (isDateValid(parsed)) expenseDate = parsed;
+      } catch (e) { console.warn("Invalid date in expense record:", expense.date); }
+    }
+    form.reset({
+      date: expenseDate,
+      accountId: expense.accountId || "",
+      description: expense.description,
+      amount: expense.amount,
+      paymentMethod: expense.paymentMethod || "",
+      reference: expense.reference || "",
+      academicYearId: expense.academicYearId || school?.currentAcademicYearId || "",
+      term: expense.term || school?.currentTerm || "",
+    });
+  };
+
+  const paymentMethods = ["Cash", "Bank Transfer", "Mobile Money", "Cheque", "Other"];
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center min-h-[calc(100vh-10rem)]"><Loader2 className="h-12 w-12 animate-spin text-primary" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card className="shadow-lg">
+        <CardHeader>
+          <CardTitle className="text-2xl flex items-center"><TrendingDown className="mr-3 h-6 w-6 text-destructive"/>Manage School Expenses</CardTitle>
+          <CardDescription>Record and track all school expenditures. Link them to specific expense accounts from your Chart of Accounts.</CardDescription>
+        </CardHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)}>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <Controller
+                    control={form.control}
+                    name="date"
+                    render={({ field, fieldState: { error } }) => (
+                    <FormItem className="flex flex-col">
+                        <FormLabel><CalendarDays className="inline mr-1 h-4 w-4"/>Date*</FormLabel>
+                        <Input
+                        type="date"
+                        value={field.value && isDateValid(field.value) ? format(field.value, 'yyyy-MM-dd') : ''}
+                        onChange={(e) => field.onChange(e.target.value ? parseISO(e.target.value) : null)}
+                        className={error ? 'border-destructive' : ''}
+                        />
+                        {error && <p className="text-sm text-destructive mt-1">{error.message}</p>}
+                    </FormItem>
+                    )}
+                />
+                <FormField control={form.control} name="accountId" render={({ field }) => (
+                  <FormItem><FormLabel><BookHeart className="inline mr-1 h-4 w-4"/>Expense Account*</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ""} disabled={expenseAccounts.length === 0}>
+                      <FormControl><SelectTrigger><SelectValue placeholder={expenseAccounts.length === 0 ? "No expense accounts defined" : "Select Expense Account"} /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {expenseAccounts.map(acc => <SelectItem key={acc.id} value={acc.id}>{acc.accountName} {acc.accountCode && `(${acc.accountCode})`}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem> )}/>
+              </div>
+              <FormField control={form.control} name="description" render={({ field }) => (
+                <FormItem><FormLabel><Info className="inline mr-1 h-4 w-4"/>Description*</FormLabel><FormControl><Textarea {...field} placeholder="Detailed description of the expense" /></FormControl><FormMessage /></FormItem> )}/>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <FormField control={form.control} name="amount" render={({ field }) => (
+                  <FormItem><FormLabel><DollarIcon className="inline mr-1 h-4 w-4"/>Amount (UGX)*</FormLabel><FormControl><Input type="number" step="any" {...field} placeholder="e.g., 50000" /></FormControl><FormMessage /></FormItem> )}/>
+                <FormField control={form.control} name="paymentMethod" render={({ field }) => (
+                  <FormItem><FormLabel>Payment Method*</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ""}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select payment method" /></SelectTrigger></FormControl>
+                      <SelectContent>{paymentMethods.map(m=><SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+                    </Select><FormMessage />
+                  </FormItem> )}/>
+                <FormField control={form.control} name="reference" render={({ field }) => (
+                    <FormItem><FormLabel>Reference (Optional)</FormLabel><FormControl><Input {...field} placeholder="e.g., Invoice #, Receipt No." /></FormControl><FormMessage /></FormItem> )}/>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField control={form.control} name="academicYearId" render={({ field }) => (
+                  <FormItem><FormLabel><BookOpen className="inline mr-1 h-4 w-4"/>Academic Year*</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ""} disabled={academicYears.length === 0}>
+                      <FormControl><SelectTrigger><SelectValue placeholder={academicYears.length === 0 ? "No academic years defined": "Select Academic Year"} /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {academicYears.map(ay => <SelectItem key={ay.id} value={ay.id}>{ay.year}</SelectItem>)}
+                      </SelectContent>
+                    </Select><FormMessage />
+                  </FormItem> )}/>
+                <FormField control={form.control} name="term" render={({ field }) => (
+                  <FormItem><FormLabel><BookOpen className="inline mr-1 h-4 w-4"/>Term*</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ""} disabled={!watchedAcademicYearId || availableTermsForSelectedYear.length === 0}>
+                      <FormControl><SelectTrigger><SelectValue placeholder={!watchedAcademicYearId ? "Select academic year first" : (availableTermsForSelectedYear.length === 0 ? "No open terms for year" : "Select Term")} /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {availableTermsForSelectedYear.map(st => <SelectItem key={st.id} value={st.name}>{st.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select><FormMessage />
+                  </FormItem> )}/>
+              </div>
+            </CardContent>
+            <CardFooter className="flex gap-2">
+              <Button type="submit" disabled={isSubmitting} className="bg-primary hover:bg-primary/90">
+                {isSubmitting ? <Loader2 className="animate-spin mr-2"/> : <PlusCircle className="mr-2"/>}
+                {isEditing ? "Update Expense" : "Add Expense"}
+              </Button>
+              {isEditing && (
+                <Button type="button" variant="outline" onClick={() => { setIsEditing(null); form.reset({ date: new Date(), accountId: "", description: "", amount: 0, paymentMethod: "", reference: "", academicYearId: school?.currentAcademicYearId || "", term: school?.currentTerm || "" }); }} disabled={isSubmitting}>
+                  Cancel Edit
+                </Button>
+              )}
+            </CardFooter>
+          </form>
+        </Form>
+      </Card>
+      <Card className="shadow-lg">
+        <CardHeader><CardTitle className="text-xl">Expense History</CardTitle></CardHeader>
+        <CardContent>
+          {expenses.length === 0 ? (
+            <p className="text-muted-foreground text-center py-4">No expenses recorded yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader><TableRow>
+                    <TableHead>Date</TableHead><TableHead>Expense Account</TableHead><TableHead>Description</TableHead>
+                    <TableHead>Academic Year/Term</TableHead><TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Method</TableHead><TableHead>Actions</TableHead>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {expenses.map(exp => {
+                    const yearName = academicYears.find(ay => ay.id === exp.academicYearId)?.year || 'N/A';
+                    const termName = exp.term || 'N/A';
+                    let entryDate = "N/A";
+                    if (exp.date) {
+                      try {
+                        const parsed = typeof exp.date === 'string' ? parseISO(exp.date) : (exp.date as Timestamp).toDate();
+                        if(isDateValid(parsed)) entryDate = format(parsed, "PP");
+                      } catch (e) { console.warn("Invalid date in expense list:", exp.date); }
+                    }
+                    return (
+                      <TableRow key={exp.id}>
+                        <TableCell className="text-xs">{entryDate}</TableCell>
+                        <TableCell className="text-xs">{exp.accountName || exp.category || 'N/A'}</TableCell>
+                        <TableCell className="text-xs truncate max-w-xs">{exp.description}</TableCell>
+                        <TableCell className="text-xs">{yearName} / {termName}</TableCell>
+                        <TableCell className="text-right text-xs font-medium">{(exp.amount || 0).toFixed(2)}</TableCell>
+                        <TableCell className="text-xs">{exp.paymentMethod}</TableCell>
+                        <TableCell className="space-x-1">
+                          <Button variant="ghost" size="icon" onClick={() => handleEditExpense(exp)} className="h-7 w-7" title="Edit"><Edit className="h-4 w-4"/></Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDeleteExpense(exp.id, exp.description)} className="h-7 w-7" title="Delete"><Trash2 className="h-4 w-4 text-destructive"/></Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+    

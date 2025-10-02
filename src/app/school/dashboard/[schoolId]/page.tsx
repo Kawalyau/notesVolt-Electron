@@ -1,0 +1,30 @@
+// src/app/school/dashboard/[schoolId]/page.tsx
+"use client";
+
+import { useEffect } from 'react';
+import { useRouter, useParams } from 'next/navigation';
+import { useAuth } from '@/hooks/use-auth';
+import { Loader2 } from 'lucide-react';
+
+export default function SchoolDashboardRedirectPage() {
+  const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
+  const params = useParams();
+  const schoolId = params.schoolId as string;
+
+  useEffect(() => {
+    if (authLoading) {
+      return; 
+    }
+    // Redirect to the new dashboard overview page.
+    router.replace(`/school/dashboard/${schoolId}/dashboard`);
+
+  }, [user, authLoading, router, schoolId]);
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-background p-6 text-center">
+      <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
+      <h1 className="text-2xl font-semibold text-primary">Redirecting to Dashboard...</h1>
+    </div>
+  );
+}

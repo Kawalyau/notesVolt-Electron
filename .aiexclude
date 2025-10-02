@@ -1,0 +1,24 @@
+# Exclude node_modules at all levels
+**/node_modules
+
+# Exclude Next.js build and cache folders
+.next/
+out/
+
+# Exclude electron-builder output
+dist/
+
+# Exclude the entire workspace directory as it appears to be a duplicate
+workspace/
+
+# Exclude development and environment specific files
+.env
+.env.local
+.vscode/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Exclude cache directories
+.npm/
+.yarn/cache/

@@ -1,0 +1,16 @@
+directories:
+  output: dist
+  buildResources: build
+appId: com.edushare-hub.app
+productName: EduShare Hub
+files:
+  - filter:
+      - main.js
+      - out
+      - node_modules
+      - package.json
+win:
+  target: nsis
+mac:
+  target: dmg
+electronVersion: 29.4.6

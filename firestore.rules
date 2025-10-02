@@ -1,0 +1,53 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+  
+    // Helper function to check if a user is an admin of a given school
+    function isSchoolAdmin(schoolId) {
+      return request.auth != null && get(/databases/$(database)/documents/schools/$(schoolId)).data.adminUids.hasAny([request.auth.uid]);
+    }
+    
+    // Helper function to check if the request comes from the application's own backend (e.g., Cloud Functions)
+    function isAppBackend() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider == 'custom';
+    }
+
+    // Users can only read their own profile
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Schools can be read by their admins or the app's backend.
+    // Write access is limited to admins.
+    match /schools/{schoolId} {
+      allow read: if isSchoolAdmin(schoolId) || isAppBackend();
+      allow write: if isSchoolAdmin(schoolId);
+
+      // Any subcollection under a school follows the same pattern
+      match /{subcollection}/{docId} {
+        allow read: if isSchoolAdmin(schoolId) || isAppBackend();
+        allow write: if isSchoolAdmin(schoolId);
+        
+        // Allow deeper nesting (e.g., students/{studentId}/feeTransactions)
+        match /{deeperSubcollection}/{deeperDocId} {
+           allow read: if isSchoolAdmin(schoolId) || isAppBackend();
+           allow write: if isSchoolAdmin(schoolId);
+        }
+      }
+    }
+    
+    // Collection group query for feeTransactions requires a specific rule
+    match /{path=**}/feeTransactions/{transactionId} {
+       allow read: if isSchoolAdmin(path[1]) || isAppBackend();
+    }
+    
+    // Published reports can be read by anyone (public access)
+    match /publishedReports/{reportId} {
+        allow read: if true;
+        allow write: if isAppBackend(); // Only backend can create/update reports
+    }
+  }
+}

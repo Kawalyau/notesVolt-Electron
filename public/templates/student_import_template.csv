@@ -1,0 +1,5 @@
+FirstName,LastName,MiddleName,Gender,DateOfBirth,ClassCodeOrName,StudentRegistrationNumber,GuardianPhone
+John,Doe,,Male,2005-08-15,P7RED,P7R001,0777123456
+Jane,Smith,Anne,Female,2006-03-22,P6BLUE,,0788123456
+Peter,Jones,Alex,Male,2007-01-10,S1GREEN,S1G003,0755123456
+Aisha,Bakari,,Female,2005-11-05,S2YELLOW,,0700123456
